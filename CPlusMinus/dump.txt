@@ -1,0 +1,3 @@
+﻿___[MOD] CPMAssembly.exe
+   |      M A N I F E S T
+
