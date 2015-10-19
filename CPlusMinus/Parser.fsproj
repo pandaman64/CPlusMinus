@@ -79,7 +79,7 @@
     <ProjectReference Include="..\AST\AST.csproj">
       <Name>AST</Name>
       <Project>{39034a3d-dab0-4075-baf5-d93e4d8bcd66}</Project>
-      <Private>False</Private>
+      <Private>True</Private>
     </ProjectReference>
   </ItemGroup>
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

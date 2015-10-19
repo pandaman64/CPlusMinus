@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,44 +12,29 @@ namespace ASTAnalyser
     {
         static void Main(string[] args)
         {
-            /*string source = @"
-namespace TestProgram{
-    class CPMProgram{
-        static void Main(){
-            Console.WriteLine(""Hello,World!"");
-        }
-    }
-}
-            ";*/
-            const string source = 
-@"namespace CPMProgram{
+            const string defaultSource =
+@"namespace TestProgram{
     class Klass{
-        let num:System.Int = 5;
-        fn discount(val:System.Double) = {
-            if(val){
-                return 0.01;
-            }
-            else{
-                return 0.02;
-            }
-        }
-        fn price(val:System.Double) = {
-            let dc:double = discount(val);
-            return num * val * (1 - dc);
+        let num:System.Double = 5.4;
+        fn main():System.Int32 = {
+            return 2;
         }
     }
 }";
-            var lineNumber = 1;
-            var lines = source.Split('\n');
+            var source = args.Any() ? File.ReadAllText(args[0]) : defaultSource;
+            var lines = source.Split('\n').Select((str, i) => new {number = i + 1, str});
             foreach (var line in lines)
             {
-                Console.WriteLine("{0} {1}",lineNumber++,line);
+                Console.WriteLine("{0} {1}",line.number,line.str);
             }
             try
             {
                 var node = Parser.runParser(source) as Node;
-                var visitor = new Visitor();
-                node.Visit(visitor);
+                var visitor = new Visitor("CPMAssembly");
+                //node.PrettyPrint(visitor);
+                node.Generate(visitor);
+                visitor.Generator.Builder.Save("out.exe");
+                Console.WriteLine("compile: finished.");
             }
             catch (Parser.CompileError e)
             {

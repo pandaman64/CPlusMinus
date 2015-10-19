@@ -3,12 +3,54 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Reflection;
+using System.Reflection.Emit;
 
 namespace AST
 {
+    static class TypeResolver
+    {
+        static bool IsIntegral(this Type type)
+        {
+            return typeof (long).IsAssignableFrom(type);
+        }
+
+        static bool IsFloat(this Type type)
+        {
+            return typeof (double).IsAssignableFrom(type);
+        }
+
+        public static Type CommonType(Type t1, Type t2)
+        {
+            if (t1.IsAssignableFrom(t2))
+            {
+                return t1;
+            }
+            else if (t2.IsAssignableFrom(t2))
+            {
+                return t2;
+            }
+            else
+            {
+                if (t1.IsIntegral() && t2.IsFloat())
+                {
+                    return typeof(long);
+                }
+                else if (t1.IsFloat() && t2.IsIntegral())
+                {
+                    return typeof (double);
+                }
+                else
+                {
+                    throw new NotImplementedException();
+                }
+            }
+        }
+    }
     public interface Node
     {
-        void Visit(Visitor visitor);
+        void PrettyPrint(Visitor visitor);
+        void Generate(Visitor visitor);
     }
 
     public class Visitor
@@ -130,13 +172,49 @@ namespace AST
             }
         }
 
-        public PrettyPrinter Printer { get; }
+        public class CodeGenerator
+        {
+            public AssemblyBuilder Builder { get; }
+            public ModuleBuilder CurrentModule { get; }
+            public TypeBuilder CurrentType { get; set; }
+            public MethodBuilder CurrentMethod { get; set; }
 
-        public Visitor(PrettyPrinter p)
+            public CodeGenerator(string name)
+            {
+                Builder = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), 
+                    AssemblyBuilderAccess.Save);
+                CurrentModule = Builder.DefineDynamicModule("CPMModule", "CPMModule.dll", true);
+            }
+
+            public Type ResolveType(Identifier identifier)
+            {
+                //Console.WriteLine("ResolveType(Identifier) must be correctly implemented");
+                var typeName = identifier.Name;
+                return Type.GetType(typeName);
+            }
+
+            public Type ResolveType(List<Identifier> identifiers)
+            {
+                //Console.WriteLine("ResolveType(List<Identifier>) must be correctly implemented");
+                var typeName = String.Join(".",identifiers.Select(id => id.Name));
+                return Type.GetType(typeName);
+            }
+
+            public Type ResolveType(Expression expr)
+            {
+                return expr.ResolveType();
+            }
+        }
+
+        public PrettyPrinter Printer { get; }
+        public CodeGenerator Generator { get; }
+
+        public Visitor(PrettyPrinter p,string name)
         {
             Printer = p;
+            Generator = new CodeGenerator(name);
         }
-        public Visitor() : this(new PrettyPrinter("  ")) { }
+        public Visitor(string name) : this(new PrettyPrinter("  "),name) { }
     }
 
     public interface Declaration : Statement
@@ -154,44 +232,53 @@ namespace AST
             classes = cs.ToList();
         }
          
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("namespace ");
-            name.Visit(visitor);
+            name.PrettyPrint(visitor);
             visitor.Printer.WriteLine("{\nclasses:");
             visitor.Printer.PushIndent();
             foreach (var klass in classes)
             {
-                klass.Visit(visitor);
+                klass.PrettyPrint(visitor);
             }
             visitor.Printer.PopIndent();
             visitor.Printer.WriteLine("}");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            //var generator = visitor.Generator;
+            foreach (var @class in classes)
+            {
+                @class.Generate(visitor);
+            }
         }
     }
 
     public class ClassDeclaration : Declaration
     {
         private Identifier name;
-        private List<VariableDeclaration> variables;
+        private List<VariableDeclaration> fields;
         private List<MethodDeclaration> methods;
 
         public ClassDeclaration(Identifier n, IEnumerable<VariableDeclaration> v, IEnumerable<MethodDeclaration> m)
         {
             name = n;
-            variables = v.ToList();
+            fields = v.ToList();
             methods = m.ToList();
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("class ");
-            name.Visit(visitor);
+            name.PrettyPrint(visitor);
             visitor.Printer.WriteLine("{");
-            visitor.Printer.WriteLine("variables:");
+            visitor.Printer.WriteLine("fields:");
             visitor.Printer.PushIndent();
-            foreach (var variable in variables)
+            foreach (var variable in fields)
             {
-                variable.Visit(visitor);
+                variable.PrettyPrint(visitor);
             }
             visitor.Printer.WriteLine();
             visitor.Printer.PopIndent();
@@ -199,83 +286,144 @@ namespace AST
             visitor.Printer.PushIndent();
             foreach (var method in methods)
             {
-                method.Visit(visitor);
+                method.PrettyPrint(visitor);
             }
             visitor.Printer.PopIndent();
             visitor.Printer.WriteLine("}");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            var generator = visitor.Generator;
+            var module = generator.CurrentModule;
+            var type = generator.CurrentType = module.DefineType(name.Name);
+            foreach (var field in fields)
+            {
+                var fieldName = field.Name.Name;
+                var fieldType = visitor.Generator.ResolveType(field.VariableType);
+                type.DefineField(fieldName, fieldType,FieldAttributes.Public);
+            }
+            foreach (var method in methods)
+            {
+                method.Generate(visitor);
+            }
+            type.CreateType();
+            generator.CurrentType = null;
         }
     }
 
     public class MethodDeclaration : Declaration
     {
-        private Identifier name;
+        public Identifier Name { get; }
         private List<VariableDeclaration> parameters;
         private Statement body;
+        public List<Identifier> ReturnType { get; }
 
-        public MethodDeclaration(Identifier n, IEnumerable<VariableDeclaration> p, Statement b)
+        public MethodDeclaration(Identifier n, IEnumerable<VariableDeclaration> p, Statement b,IEnumerable<Identifier> r)
         {
-            name = n;
+            Name = n;
             parameters = p.ToList();
             body = b;
+            ReturnType = r.ToList();
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("fn ");
-            name.Visit(visitor);
+            Name.PrettyPrint(visitor);
             visitor.Printer.Write("(");
             if (parameters.Any())
             {
-                parameters.First().Visit(visitor);
+                parameters.First().PrettyPrint(visitor);
                 foreach (var param in parameters.Skip(1))
                 {
                     visitor.Printer.Write(",");
-                    param.Visit(visitor);
+                    param.PrettyPrint(visitor);
                 }
             }
-            visitor.Printer.WriteLine(") = ");
-            body.Visit(visitor);
+            visitor.Printer.Write("):");
+
+            ReturnType.First().PrettyPrint(visitor);
+            foreach (var type in ReturnType.Skip(1))
+            {
+                Console.Write(".");
+                type.PrettyPrint(visitor);
+            }
+
+            visitor.Printer.WriteLine(" = ");
+            body.PrettyPrint(visitor);
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            
+            var type = visitor.Generator.CurrentType;
+            var returnType = visitor.Generator.ResolveType(ReturnType);
+            var parameterTypes =
+                parameters.Select(parameter => visitor.Generator.ResolveType(parameter.VariableType)).ToArray();
+            //generate entry point
+            if (Name.Name == "main")
+            {
+                visitor.Generator.CurrentMethod = type.DefineMethod(Name.Name,
+                    MethodAttributes.Public | MethodAttributes.Static, returnType,
+                    parameterTypes);
+            }
+            else
+            {
+                visitor.Generator.CurrentMethod = type.DefineMethod(Name.Name, MethodAttributes.Public, returnType,
+                    parameterTypes);
+            }
+            body.Generate(visitor);
+            if (Name.Name == "main")
+            {
+                visitor.Generator.Builder.SetEntryPoint(visitor.Generator.CurrentMethod);
+            }
         }
     }
 
     public class VariableDeclaration : Declaration
     {
-        private Identifier name;
-        private List<Identifier> type;
-        private Expression initializer;
+        public Identifier Name { get; }
+        public List<Identifier> VariableType { get; }
+        public Expression Initializer { get; }
 
         public VariableDeclaration(Identifier n, IEnumerable<Identifier> t)
         {
-            name = n;
-            type = t.ToList();
-            initializer = null;
+            Name = n;
+            VariableType = t.ToList();
+            Initializer = null;
         }
         public VariableDeclaration(Identifier n, IEnumerable<Identifier> t,Expression init)
         {
-            name = n;
-            type = t.ToList();
-            initializer = init;
+            Name = n;
+            VariableType = t.ToList();
+            Initializer = init;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("let ");
-            name.Visit(visitor);
+            Name.PrettyPrint(visitor);
             visitor.Printer.Write(":");
-            if (type.Any())
+            if (VariableType.Any())
             {
-                type.First().Visit(visitor);
-                foreach (var id in type.Skip(1))
+                VariableType.First().PrettyPrint(visitor);
+                foreach (var id in VariableType.Skip(1))
                 {
                     visitor.Printer.Write(".");
-                    id.Visit(visitor);
+                    id.PrettyPrint(visitor);
                 }
             }
-            if (initializer != null)
+            if (Initializer != null)
             {
                 visitor.Printer.Write(" = ");
-                initializer.Visit(visitor);
+                Initializer.PrettyPrint(visitor);
             }
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            throw new NotImplementedException();
         }
     }
 
@@ -285,17 +433,22 @@ namespace AST
 
     public class ExpressionStatement : Statement
     {
-        private Expression expression;
+        public Expression Expr { get; }
 
         public ExpressionStatement(Expression e)
         {
-            expression = e;
+            Expr = e;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
-            expression.Visit(visitor);
+            Expr.PrettyPrint(visitor);
             visitor.Printer.WriteLine(";");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            throw new NotImplementedException();
         }
     }
 
@@ -309,16 +462,24 @@ namespace AST
         }
 
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.WriteLine("{");
             visitor.Printer.PushIndent();
             foreach (var stmt in statements)
             {
-                stmt.Visit(visitor);
+                stmt.PrettyPrint(visitor);
             }
             visitor.Printer.PopIndent();
             visitor.Printer.WriteLine("}");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            foreach (var statement in statements)
+            {
+                statement.Generate(visitor);
+            }
         }
     }
 
@@ -337,41 +498,54 @@ namespace AST
             elseIfList = elseIf.ToList();
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("if(");
-            condition.Visit(visitor);
+            condition.PrettyPrint(visitor);
             visitor.Printer.WriteLine(") then");
-            thenStatement.Visit(visitor);
+            thenStatement.PrettyPrint(visitor);
             foreach (var elif in elseIfList)
             {
                 visitor.Printer.Write("else if(");
-                elif.Item1.Visit(visitor);
+                elif.Item1.PrettyPrint(visitor);
                 visitor.Printer.WriteLine(") then");
-                elif.Item2.Visit(visitor);
+                elif.Item2.PrettyPrint(visitor);
             }
             visitor.Printer.WriteLine("else");
-            elseStatement.Visit(visitor);
+            elseStatement.PrettyPrint(visitor);
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            throw new NotImplementedException();
         }
     }
 
     public class ReturnStatement : Statement
     {
-        private ExpressionStatement returnExpression;
+        private Expression returnExpression;
 
-        public ReturnStatement(ExpressionStatement expr)
+        public ReturnStatement(Expression expr)
         {
             returnExpression = expr;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("return ");
-            returnExpression.Visit(visitor);
+            returnExpression.PrettyPrint(visitor);
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            returnExpression.Generate(visitor);
+            visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Ret);
         }
     }
 
-    public interface Expression : Node { }
+    public interface Expression : Node {
+        Type ResolveType();
+    }
     public class BinaryExpression : Expression
     {
         public enum ExpressionType
@@ -392,10 +566,10 @@ namespace AST
             rhs = r;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("(");
-            lhs.Visit(visitor);
+            lhs.PrettyPrint(visitor);
             switch (type)
             {
                     case ExpressionType.Add:
@@ -414,8 +588,37 @@ namespace AST
                         visitor.Printer.Write("/");
                     break;
             }
-            rhs.Visit(visitor);
+            rhs.PrettyPrint(visitor);
             visitor.Printer.Write(")");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            lhs.Generate(visitor);
+            rhs.Generate(visitor);
+            var generator = visitor.Generator.CurrentMethod.GetILGenerator();
+            switch (type)
+            {
+                case ExpressionType.Add:
+                    generator.Emit(OpCodes.Add);
+                    break;
+                case ExpressionType.Subtract:
+                    generator.Emit(OpCodes.Div);
+                    break;
+                case ExpressionType.Multiply:
+                    generator.Emit(OpCodes.Mul);
+                    break;
+                case ExpressionType.Divide:
+                    generator.Emit(OpCodes.Div);
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
+
+        public Type ResolveType()
+        {
+            return TypeResolver.CommonType(lhs.ResolveType(), rhs.ResolveType());
         }
     }
 
@@ -428,25 +631,60 @@ namespace AST
             value = v;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
             visitor.Printer.Write("<");
+            visitor.Printer.Write(typeof(T).Name);
+            visitor.Printer.Write("|");
             visitor.Printer.Write(value);
             visitor.Printer.Write(">");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            var generator = visitor.Generator.CurrentMethod.GetILGenerator();
+            if (typeof(T) == typeof(int))
+            {
+                generator.Emit(OpCodes.Ldc_I4, (int)(object)value);
+            }
+            else if (typeof (T) == typeof (double))
+            {
+                generator.Emit(OpCodes.Ldc_R8, (double) (object) value);
+            }
+            else
+            {
+                throw new NotImplementedException("Literal not supported");
+            }
+        }
+
+        public Type ResolveType()
+        {
+            return typeof (T);
         }
     }
 
     public class Identifier : Expression
     {
-        private string name;
+        public string Name { get; }
+
         public Identifier(string n)
         {
-            name = n;
+            Name = n;
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
-            visitor.Printer.Write("|"+name+"|");
+            visitor.Printer.Write("|" + Name + "|");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Type ResolveType()
+        {
+            throw new NotImplementedException();
         }
     }
 
@@ -461,20 +699,30 @@ namespace AST
             arguments = args.ToList();
         }
 
-        public void Visit(Visitor visitor)
+        public void PrettyPrint(Visitor visitor)
         {
-            callee.Visit(visitor);
+            callee.PrettyPrint(visitor);
             visitor.Printer.Write("(");
             if (arguments.Any())
             {
-                arguments.First().Visit(visitor);
+                arguments.First().PrettyPrint(visitor);
                 foreach (var argument in arguments.Skip(1))
                 {
                     visitor.Printer.Write(",");
-                    argument.Visit(visitor);
+                    argument.PrettyPrint(visitor);
                 }
             }
             visitor.Printer.WriteLine(")");
+        }
+
+        public void Generate(Visitor visitor)
+        {
+            throw new NotImplementedException();
+        }
+
+        public Type ResolveType()
+        {
+            throw new NotImplementedException();
         }
     }
 }

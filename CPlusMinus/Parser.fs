@@ -13,7 +13,9 @@ type Parser<'a> = Parser<'a,unit>
 //identifier = { letter }
 //identifierList = identifier, [".", identifier]
 let identifier:Parser<_> = parse{
-    let! id = many1Satisfy isLetter .>> spaces
+    let identifierHead c = isLetter c || c = '_'
+    let identifierTail c = isLetter c || c = '_' || Char.IsDigit c
+    let! id = many1Satisfy2 identifierHead identifierTail .>> spaces
     return new Identifier(id) 
 }
 let identifierList:Parser<_> =
@@ -36,12 +38,16 @@ let stringLiteral:Parser<_> = parse{
 //unaryExpression = naturalIntegerLiteral
 //callExpression = identifierList, expressionList
 //expressionList = "(", expressionList, ",", expression, ")"
-
 let expression, expressionRef = createParserForwardedToRef ()
 let statement, statementRef = createParserForwardedToRef ()
 
 let mulExpression:Parser<_> = 
-    let anyLiteral = (floatLiteral |>> fun lit -> lit :> Expression) <|> (naturalIntegerLiteral |>> fun lit -> lit :> Expression)
+    let anyLiteral = 
+        choice[
+            attempt ((naturalIntegerLiteral |>> fun lit -> lit :> Expression) .>> (notFollowedByString "."))
+            (floatLiteral |>> fun lit -> lit :> Expression)
+            (stringLiteral |>> fun lit -> lit :> Expression)
+        ]
     let term = 
         between (skipChar '(' .>> spaces) (skipChar ')' .>> spaces) expression
     let unaryExpr = anyLiteral <|> (identifier |>> fun id -> id :> Expression) <|> term
@@ -100,8 +106,9 @@ let parameterList:Parser<_> = sepBy parameter (skipChar ',' .>> spaces)
 let functionDeclarationStatement:Parser<_> = parse{
     let! name = fnKeyword >>. identifier
     let! param = between (skipChar '(' .>> spaces) (skipChar ')' .>> spaces) parameterList
+    let! returnType = skipChar ':' >>. spaces >>. identifierList
     let! body = skipChar '=' >>. spaces >>. statement
-    return new MethodDeclaration(name,param,body);
+    return new MethodDeclaration(name,param,body,returnType);
 }
 let classDeclarationStatement:Parser<_> =
     let mutable variables:VariableDeclaration list = []
@@ -136,7 +143,7 @@ let returnStatement =
     let parser = parse{
         do! skipString "return" .>> spaces
         let! expr = expressionStatement
-        return new ReturnStatement(expr)
+        return new ReturnStatement(expr.Expr)
     }
     parser <?> "return statement"
 
@@ -174,10 +181,10 @@ type CompileError(line:int64,column:int64,message:string[]) =
 let runParser str = 
     match run language str with
     | Success(result,_,_) -> result
-    | Failure(_,err,_) ->
+    | Failure(_) as failure ->
         //let messages = ErrorMessageList.ToSortedArray(err.Messages)
         //raise (new CompileError(err.Position.Line,err.Position.Column,Array.map (fun x -> x.ToString()) messages))
-        failwith (err.ToString())
+        failwith (sprintf "%A" failure)
 (*
 [<EntryPoint>]
 let main argv = 
