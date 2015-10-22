@@ -73,9 +73,17 @@ let callExpression:Parser<_> = parse{
     return new FunctionCall(callee,args)
 }
 
+let assignExpression:Parser<_> = parse{
+    let! target = identifier
+    do! skipString "<-" .>> spaces
+    let! value = expression
+    return new AssignExpression(target,value)
+}
+
 do expressionRef := 
     choice [
         attempt (callExpression |>> fun call -> call :> Expression)
+        attempt (assignExpression |>> fun assign -> assign :> Expression)
         addExpression
     ] <?> "expression"
 
@@ -90,33 +98,66 @@ let parameter = parse{
     let! t = identifierList
     return new VariableDeclaration(id,t);
 }
-let letKeyword:Parser<_> = skipString "let" .>> spaces
-let fnKeyword:Parser<_> = skipString "fn" .>> spaces
-let classKeyword:Parser<_> = skipString "class" .>> spaces
+let letKeyword:Parser<_> = skipString "let" .>> spaces1
+let fnKeyword:Parser<_> = skipString "fn" .>> spaces1
+let classKeyword:Parser<_> = skipString "class" .>> spaces1
+let optionalKeyword keyword = opt (pstring keyword) .>> spaces1
+let pinit = 
+    let initializerParser = skipChar '=' >>. spaces >>. initializer .>> pchar ';' .>> spaces1
+    opt initializerParser
+let parameterDeclaration = parse{
+    let! name = letKeyword >>. identifier .>> skipChar ':' .>> spaces
+    let! t = identifierList
+    return new ParameterDeclaration(name,t)
+}
+let fieldDeclaration = parse{
+    let! isStatic = optionalKeyword "static"
+    let! field = parameterDeclaration
+    let! initializer = pinit
+    match initializer with
+    | Some(initializer) -> return new FieldDeclaration(field.Name,field.Type,initializer,isStatic.IsSome)
+    | None -> return new FieldDeclaration(field.Name,field.Type,null,isStatic.IsSome)
+}
 let variableDeclarlationStatement:Parser<_> = parse{
     let! name = letKeyword >>. identifier .>> skipChar ':' .>> spaces
     let! t = identifierList
-    let initializerParser = skipChar '=' >>. spaces >>. initializer .>> pchar ';' .>> spaces
-    let! initializer = opt initializerParser
+    let! initializer = pinit
     match initializer with
     | Some(initializer) -> return new VariableDeclaration(name,t,initializer)
     | None -> return new VariableDeclaration(name,t,null)
 }
 let parameterList:Parser<_> = sepBy parameter (skipChar ',' .>> spaces)
 let functionDeclarationStatement:Parser<_> = parse{
+    let! isStatic = optionalKeyword "static"
     let! name = fnKeyword >>. identifier
     let! param = between (skipChar '(' .>> spaces) (skipChar ')' .>> spaces) parameterList
     let! returnType = skipChar ':' >>. spaces >>. identifierList
     let! body = skipChar '=' >>. spaces >>. statement
-    return new MethodDeclaration(name,param,body,returnType);
+    return new MethodDeclaration(name,param,body,returnType,isStatic.IsSome);
 }
-let classDeclarationStatement:Parser<_> =
-    let mutable variables:VariableDeclaration list = []
-    let mutable methods:MethodDeclaration list = []
-    let anyDeclaration = (functionDeclarationStatement |>> (fun f -> methods <- f::methods)) <|> (variableDeclarlationStatement |>> (fun v -> variables <- v::variables))
-    ((classKeyword >>. identifier) 
-    .>> (pchar '{' >>. spaces >>. (many anyDeclaration) .>> pchar '}' .>> spaces))
-    |>> (fun id -> new ClassDeclaration(id,variables,methods))
+let classDeclarationStatement:Parser<_> = parse{
+    let either left right x = 
+        match x with
+        | Choice1Of2(y) -> left y
+        | Choice2Of2(y) -> right y
+    let left x (l,r) = (x::l,r)
+    let right x (l,r) = (l,x::r)
+    let folder s e = either left right e s
+    let partitionEithers = List.fold folder ([],[])
+    //let mutable fields:FieldDeclaration list = []
+    //let mutable methods:MethodDeclaration list = []
+    //let anyDeclaration = attempt (functionDeclarationStatement |>> (fun f -> methods <- f::methods)) 
+                            //<|> (fieldDeclaration |>> (fun v -> fields <- v::fields))
+    let! id = classKeyword >>. identifier
+    let anyDeclaration = attempt (functionDeclarationStatement |>> Choice1Of2)
+                            <|> (fieldDeclaration |>> Choice2Of2)
+    let! declarations = pchar '{' >>. spaces >>. (many anyDeclaration) .>> pchar '}' .>> spaces
+    let (methods,fields) = partitionEithers declarations
+    //((classKeyword >>. identifier) 
+    //.>> (pchar '{' >>. spaces >>. (many anyDeclaration) .>> pchar '}' .>> spaces))
+    //|>> (fun id -> new ClassDeclaration(id,fields,methods))
+    return new ClassDeclaration(id,fields,methods)
+}
 
 //statement = singleStatement | compoundStatement
 //expressionStatement = expression, ";"
@@ -173,10 +214,6 @@ let namespaceDeclaration = parse{
 }
 
 let language = spaces >>. namespaceDeclaration
-
-type CompileError(line:int64,column:int64,message:string[]) =
-    inherit Exception()
-    override this.ToString() = (String.concat "\n" message) + "\n" + base.ToString()
 
 let runParser str = 
     match run language str with
