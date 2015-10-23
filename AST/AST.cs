@@ -729,6 +729,7 @@ namespace AST
         {
             visitor.Printer.Write("return ");
             returnExpression.PrettyPrint(visitor);
+            visitor.Printer.WriteLine(";");
         }
 
         public void Generate(Visitor visitor)
@@ -773,7 +774,15 @@ namespace AST
             Add,
             Subtract,
             Multiply,
-            Divide
+            Divide,
+            Equal,
+            NotEqual,
+            LessThan,
+            LessThanOrEqual,
+            GreaterThan,
+            GreaterThanOrEqual,
+            LogicalOr,
+            LogicalAnd
         }
 
         private ExpressionType type;
@@ -792,20 +801,41 @@ namespace AST
             lhs.PrettyPrint(visitor);
             switch (type)
             {
-                    case ExpressionType.Add:
-                        visitor.Printer.Write("+");
+                case ExpressionType.Add:
+                    visitor.Printer.Write("+");
                     break;
-
-                    case ExpressionType.Subtract:
-                        visitor.Printer.Write("-");
+                case ExpressionType.Subtract:
+                    visitor.Printer.Write("-");
                     break;
-
-                    case ExpressionType.Multiply:
-                        visitor.Printer.Write("*");
+                case ExpressionType.Multiply:
+                    visitor.Printer.Write("*");
                     break;
-
-                    case ExpressionType.Divide:
-                        visitor.Printer.Write("/");
+                case ExpressionType.Divide:
+                    visitor.Printer.Write("/");
+                    break;
+                case ExpressionType.Equal:
+                    visitor.Printer.Write("=");
+                    break;
+                case ExpressionType.NotEqual:
+                    visitor.Printer.Write("<>");
+                    break;
+                case ExpressionType.LessThan:
+                    visitor.Printer.Write("<");
+                    break;
+                case ExpressionType.LessThanOrEqual:
+                    visitor.Printer.Write("<=");
+                    break;
+                case ExpressionType.GreaterThan:
+                    visitor.Printer.Write(">");
+                    break;
+                case ExpressionType.GreaterThanOrEqual:
+                    visitor.Printer.Write(">=");
+                    break;
+                case ExpressionType.LogicalOr:
+                    visitor.Printer.Write("||");
+                    break;
+                case ExpressionType.LogicalAnd:
+                    visitor.Printer.Write("&&");
                     break;
             }
             rhs.PrettyPrint(visitor);
@@ -823,7 +853,7 @@ namespace AST
                     generator.Emit(OpCodes.Add);
                     break;
                 case ExpressionType.Subtract:
-                    generator.Emit(OpCodes.Div);
+                    generator.Emit(OpCodes.Sub);
                     break;
                 case ExpressionType.Multiply:
                     generator.Emit(OpCodes.Mul);
@@ -831,8 +861,45 @@ namespace AST
                 case ExpressionType.Divide:
                     generator.Emit(OpCodes.Div);
                     break;
-                default:
-                    throw new ArgumentOutOfRangeException();
+                case ExpressionType.Equal:
+                    generator.Emit(OpCodes.Ceq);
+                    break;
+                case ExpressionType.NotEqual:
+                    //(lhs == rhs) == false
+                    generator.Emit(OpCodes.Ceq);
+                    generator.Emit(OpCodes.Ldc_I4_0);
+                    generator.Emit(OpCodes.Ceq);
+                    break;
+                case ExpressionType.LessThan:
+                    generator.Emit(OpCodes.Clt);
+                    break;
+                case ExpressionType.LessThanOrEqual:
+                    //(lhs > rhs) == false
+                    generator.Emit(OpCodes.Cgt);
+                    generator.Emit(OpCodes.Ldc_I4_0);
+                    generator.Emit(OpCodes.Ceq);
+                    break;
+                case ExpressionType.GreaterThan:
+                    generator.Emit(OpCodes.Cgt);
+                    break;
+                case ExpressionType.GreaterThanOrEqual:
+                    //(lhs < rhs) == false
+                    generator.Emit(OpCodes.Clt);
+                    generator.Emit(OpCodes.Ldc_I4_0);
+                    generator.Emit(OpCodes.Ceq);
+                    break;
+                case ExpressionType.LogicalOr:
+                    //(lhs + rhs) > 0
+                    generator.Emit(OpCodes.Add);
+                    generator.Emit(OpCodes.Ldc_I4_0);
+                    generator.Emit(OpCodes.Cgt);
+                    break;
+                case ExpressionType.LogicalAnd:
+                    //(lhs + rhs) > 1
+                    generator.Emit(OpCodes.Add);
+                    generator.Emit(OpCodes.Ldc_I4_1);
+                    generator.Emit(OpCodes.Cgt);
+                    break;
             }
         }
 
@@ -863,25 +930,25 @@ namespace AST
 
         public void PrettyPrint(Visitor visitor)
         {
-            visitor.Printer.Write("<");
-            visitor.Printer.Write(typeof(T).Name);
+            visitor.Printer.Write("(");
+            visitor.Printer.Write(typeof (T).Name);
             visitor.Printer.Write("|");
             visitor.Printer.Write(value);
-            visitor.Printer.Write(">");
+            visitor.Printer.Write(")");
         }
 
         public void Generate(Visitor visitor)
         {
             var generator = visitor.Generator.CurrentMethod.GetILGenerator();
-            if (typeof(T) == typeof(int))
+            if (typeof (T) == typeof (int))
             {
-                generator.Emit(OpCodes.Ldc_I4, (int)(object)value);
+                generator.Emit(OpCodes.Ldc_I4, (int) (object) value);
             }
             else if (typeof (T) == typeof (double))
             {
                 generator.Emit(OpCodes.Ldc_R8, (double) (object) value);
             }
-            else if(typeof(T) == typeof(string))
+            else if (typeof (T) == typeof (string))
             {
                 generator.Emit(OpCodes.Ldstr, (string) (object) value);
             }
@@ -985,7 +1052,7 @@ namespace AST
                 function.ObjectType = visitor.Generator.CurrentType;
             }
             var method = visitor.Generator.DeclaredMethodBuilders.Lookup(function.Name);
-            visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Call,method);
+            visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Call, method);
         }
 
         public Type ResolveType()
@@ -1013,15 +1080,15 @@ namespace AST
             fieldDeclaration = decl;
         }
 
-        override public void PrettyPrint(Visitor visitor)
+        public override void PrettyPrint(Visitor visitor)
         {
             throw new NotImplementedException();
         }
 
-        override public void Generate(Visitor visitor)
+        public override void Generate(Visitor visitor)
         {
             var field = visitor.Generator.DeclaredFieldBuilders.Lookup(fieldDeclaration.Name);
-            
+
             if (fieldDeclaration.IsStatic)
             {
                 if (isLValue)
@@ -1039,7 +1106,7 @@ namespace AST
             }
         }
 
-        override public Type ResolveType()
+        public override Type ResolveType()
         {
             throw new NotImplementedException();
         }
@@ -1051,16 +1118,16 @@ namespace AST
         public Type Type { get; }
         public short Index { get; }
 
-        public ParameterAccess(Identifier n, Type t,short index)
+        public ParameterAccess(Identifier n, Type t, short index)
         {
             Name = n;
             Type = t;
             Index = index;
         }
 
-        override public void PrettyPrint(Visitor visitor)
+        public override void PrettyPrint(Visitor visitor)
         {
-            visitor.Printer.Write("__param__->{0}",Name);
+            visitor.Printer.Write("__param__->{0}", Name);
         }
 
         public override void Generate(Visitor visitor)
@@ -1076,7 +1143,7 @@ namespace AST
             }
         }
 
-        override public Type ResolveType()
+        public override Type ResolveType()
         {
             return Type;
         }
@@ -1092,6 +1159,7 @@ namespace AST
             ObjectType = null;
             Name = n;
         }
+
         public MethodAccess(TypeBuilder ot, Identifier n)
         {
             ObjectType = ot;

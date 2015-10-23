@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -12,18 +13,19 @@ namespace ASTAnalyser
     {
         static void Main(string[] args)
         {
+            /*const string source = "4>3";
+            var node = Parser.runCompareParser(source);
+            var visitor = new Visitor("CPMAssembly");
+            node.PrettyPrint(visitor);*/
             const string defaultSource =
 @"namespace TestProgram{
     class Klass{
         static let namako:System.Int32 = 2;
-        static fn price(num:System.Int32):System.Int32 = {
-            let unit_price:System.Int32 = 5;
-            let shipping:System.Int32 = num * 2;
-            return num * unit_price + shipping;
-        }
+        static let hoge:System.Int32 = 6;
         static fn main():System.Int32 = {
             namako <- 42;
-            return namako;
+            hoge <- 52;
+            return (1 >< 1) || (2 - 2 < 0);
         }
     }
 }";
@@ -35,10 +37,15 @@ namespace ASTAnalyser
             }
             var node = Parser.runParser(source) as Node;
             var visitor = new Visitor("CPMAssembly");
-            //node.PrettyPrint(visitor);
+            node.PrettyPrint(visitor);
             node.Generate(visitor);
             visitor.Generator.Builder.Save("out.exe");
             Console.WriteLine("compile: finished.");
+
+            Console.WriteLine("running...");
+            var proc = Process.Start("out.exe");
+            proc.WaitForExit(10*1000);
+            Console.WriteLine("Exit code is:{0}",proc.ExitCode);
         }
     }
 }

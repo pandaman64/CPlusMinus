@@ -41,6 +41,9 @@ let stringLiteral:Parser<_> = parse{
 let expression, expressionRef = createParserForwardedToRef ()
 let statement, statementRef = createParserForwardedToRef ()
 
+let binaryOperator opString exprType =
+    skipString opString .>> spaces >>% fun lhs rhs -> new BinaryExpression(exprType,lhs,rhs) :> Expression
+
 let mulExpression:Parser<_> = 
     let anyLiteral = 
         choice[
@@ -51,16 +54,49 @@ let mulExpression:Parser<_> =
     let term = 
         between (skipChar '(' .>> spaces) (skipChar ')' .>> spaces) expression
     let unaryExpr = anyLiteral <|> (identifier |>> fun id -> id :> Expression) <|> term
-    let mulOperator = skipChar '*' .>> spaces >>% fun lhs rhs -> new BinaryExpression(BinaryExpression.ExpressionType.Multiply,lhs,rhs) :> Expression
-    let divOperator = skipChar '/' .>> spaces >>% fun lhs rhs -> new BinaryExpression(BinaryExpression.ExpressionType.Divide,lhs,rhs) :> Expression
+    let mulOperator = binaryOperator "*" BinaryExpression.ExpressionType.Multiply
+    let divOperator = binaryOperator "/" BinaryExpression.ExpressionType.Divide
     let operator = mulOperator <|> divOperator
     chainl1 unaryExpr operator <?> "multiply expression"
 
 let addExpression:Parser<_> =
-    let addOperator = skipChar '+' .>> spaces >>% fun lhs rhs -> new BinaryExpression(BinaryExpression.ExpressionType.Add,lhs,rhs) :> Expression
-    let subOperator = skipChar '-' .>> spaces >>% fun lhs rhs -> new BinaryExpression(BinaryExpression.ExpressionType.Subtract,lhs,rhs) :> Expression
+    let addOperator = binaryOperator "+" BinaryExpression.ExpressionType.Add
+    let subOperator = binaryOperator "-" BinaryExpression.ExpressionType.Subtract
     let operator = addOperator <|> subOperator
     chainl1 mulExpression operator <?> "add expression"
+
+let equalExpression =
+    let equalOperator = binaryOperator "><" BinaryExpression.ExpressionType.Equal
+    let notEqualOperaor = binaryOperator "<>" BinaryExpression.ExpressionType.NotEqual
+    let operator = equalOperator <|> notEqualOperaor
+    chainl1 addExpression operator <?> "equal expression"
+
+let relationalExpression = 
+    let greaterThan = attempt (binaryOperator ">" BinaryExpression.ExpressionType.GreaterThan .>> notFollowedByString "=")
+    let greaterThanOrEq = binaryOperator ">=" BinaryExpression.ExpressionType.GreaterThanOrEqual
+    let lessThan = attempt (binaryOperator "<" BinaryExpression.ExpressionType.LessThan .>> notFollowedByString "=")
+    let lessThanOrEq = binaryOperator "<=" BinaryExpression.ExpressionType.LessThanOrEqual
+    let operator = 
+        choice[
+            greaterThan
+            greaterThanOrEq
+            lessThan
+            lessThanOrEq
+        ]
+    chainl1 addExpression operator <?> "relational expression"
+
+let compareExpression =
+    choice[
+        attempt relationalExpression
+        equalExpression
+    ]
+let logicalAndExpression =
+    let operator = binaryOperator "&&" BinaryExpression.ExpressionType.LogicalAnd
+    chainl1 compareExpression operator <?> "logical and expression"
+
+let logicalOrExpression =
+    let operator = binaryOperator "||" BinaryExpression.ExpressionType.LogicalOr
+    chainl1 logicalAndExpression operator <?> "logical or expression"
 
 let expressionList:Parser<_> = 
     let delimiter = skipChar ',' >>. spaces >>% (fun x xs -> List.concat [x;xs])
@@ -84,7 +120,7 @@ do expressionRef :=
     choice [
         attempt (callExpression |>> fun call -> call :> Expression)
         attempt (assignExpression |>> fun assign -> assign :> Expression)
-        addExpression
+        logicalOrExpression
     ] <?> "expression"
 
 //Declaration
@@ -215,13 +251,17 @@ let namespaceDeclaration = parse{
 
 let language = spaces >>. namespaceDeclaration
 
-let runParser str = 
-    match run language str with
+let runAnyParser str parser =
+    match run parser str with
     | Success(result,_,_) -> result
     | Failure(_) as failure ->
         //let messages = ErrorMessageList.ToSortedArray(err.Messages)
         //raise (new CompileError(err.Position.Line,err.Position.Column,Array.map (fun x -> x.ToString()) messages))
         failwith (sprintf "%A" failure)
+let runCompareParser str =
+    runAnyParser str compareExpression
+let runParser str = 
+    runAnyParser str language
 (*
 [<EntryPoint>]
 let main argv = 
