@@ -173,17 +173,16 @@ let pinit =
     let initializerParser = skipChar '=' >>. spaces >>. initializer .>> pchar ';' .>> spaces1
     opt initializerParser
 let parameterDeclaration = parse{
-    let! name = letKeyword >>. identifier .>> skipChar ':' .>> spaces
+    let! name = (attempt letKeyword) >>. identifier .>> skipChar ':' .>> spaces
     let! t = identifierList
     return new ParameterDeclaration(name,t)
 }
-let fieldDeclaration = parse{
-    let! isStatic = optionalKeyword "static"
+let fieldDeclaration isStatic = parse{
     let! field = parameterDeclaration
     let! initializer = pinit
     match initializer with
-    | Some(initializer) -> return new FieldDeclaration(field.Name,field.Type,initializer,isStatic.IsSome)
-    | None -> return new FieldDeclaration(field.Name,field.Type,null,isStatic.IsSome)
+    | Some(initializer) -> return new FieldDeclaration(field.Name,field.Type,initializer,isStatic)
+    | None -> return new FieldDeclaration(field.Name,field.Type,null,isStatic)
 }
 let variableDeclarlationStatement:Parser<_> = parse{
     let! name = letKeyword >>. identifier .>> skipChar ':' .>> spaces
@@ -194,13 +193,12 @@ let variableDeclarlationStatement:Parser<_> = parse{
     | None -> return new VariableDeclaration(name,t,null)
 }
 let parameterList:Parser<_> = sepBy parameter (skipChar ',' .>> spaces)
-let functionDeclarationStatement:Parser<_> = parse{
-    let! isStatic = optionalKeyword "static"
-    let! name = fnKeyword >>. identifier
+let functionDeclarationStatement isStatic :Parser<_> = parse{
+    let! name = (attempt fnKeyword) >>. identifier
     let! param = between (skipChar '(' .>> spaces) (skipChar ')' .>> spaces) parameterList
     let! returnType = skipChar ':' >>. spaces >>. identifierList
     let! body = skipChar '=' >>. spaces >>. statement
-    return new MethodDeclaration(name,param,body,returnType,isStatic.IsSome);
+    return new MethodDeclaration(name,param,body,returnType,isStatic);
 }
 let classDeclarationStatement:Parser<_> = parse{
     let either left right x = 
@@ -216,8 +214,12 @@ let classDeclarationStatement:Parser<_> = parse{
     //let anyDeclaration = attempt (functionDeclarationStatement |>> (fun f -> methods <- f::methods)) 
                             //<|> (fieldDeclaration |>> (fun v -> fields <- v::fields))
     let! id = classKeyword >>. identifier
-    let anyDeclaration = attempt (functionDeclarationStatement |>> Choice1Of2)
-                            <|> (fieldDeclaration |>> Choice2Of2)
+    let anyDeclaration = parse{
+        let! isStatic = optionalKeyword "static"
+        let! declaration =  (functionDeclarationStatement isStatic.IsSome |>> Choice1Of2)
+                        <|> (fieldDeclaration isStatic.IsSome |>> Choice2Of2)
+        return declaration
+    }
     let! declarations = pchar '{' >>. spaces >>. (many anyDeclaration) .>> pchar '}' .>> spaces
     let (methods,fields) = partitionEithers declarations
     //((classKeyword >>. identifier) 
@@ -259,8 +261,8 @@ let singleStatement =
     let asStatement = fun stmt -> stmt :> Statement
     choice [
         variableDeclarlationStatement |>> asStatement
-        functionDeclarationStatement |>> asStatement
-        classDeclarationStatement |>> asStatement
+        //functionDeclarationStatement |>> asStatement
+        //classDeclarationStatement |>> asStatement
         returnStatement |>> asStatement
         ifStatement |>> asStatement
         expressionStatement |>> asStatement
