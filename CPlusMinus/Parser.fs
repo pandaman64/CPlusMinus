@@ -7,7 +7,28 @@ open System.Reflection.Emit;
 open AST;
 open System.Collections.Generic
 
-type Parser<'a> = Parser<'a,unit>
+type Context = {
+    Messages : string list
+    Verbose : bool
+}
+
+let appendMessage message ctx = {ctx with Messages = message::ctx.Messages}
+let appendMessageParser fmt = 
+    let appender str = updateUserState (fun ctx -> appendMessage str ctx)
+    Printf.ksprintf appender fmt
+let nullContext verb = {Messages = [""];Verbose = verb}
+
+//from fparsec page
+let (<!>) (p: Parser<_,Context>) label : Parser<_,_> =
+    fun stream ->
+        if stream.UserState.Verbose then
+            printfn "%A: Entering %s" stream.Position label
+        let reply = p stream
+        if stream.UserState.Verbose then
+            printfn "%A: Leaving %s (%A)" stream.Position label reply.Status
+        reply
+
+type Parser<'a> = Parser<'a,Context>
 
 //identifier
 //identifier = { letter }
@@ -16,6 +37,7 @@ let identifier:Parser<_> = parse{
     let identifierHead c = isLetter c || c = '_'
     let identifierTail c = isLetter c || c = '_' || Char.IsDigit c
     let! id = many1Satisfy2 identifierHead identifierTail .>> spaces
+    //do! appendMessageParser "parse identifier %s" id
     return new Identifier(id) 
 }
 let identifierList:Parser<_> =
@@ -57,46 +79,54 @@ let mulExpression:Parser<_> =
     let mulOperator = binaryOperator "*" BinaryExpression.ExpressionType.Multiply
     let divOperator = binaryOperator "/" BinaryExpression.ExpressionType.Divide
     let operator = mulOperator <|> divOperator
-    chainl1 unaryExpr operator <?> "multiply expression"
+    chainl1 unaryExpr operator <!> "multiply expression"
 
 let addExpression:Parser<_> =
     let addOperator = binaryOperator "+" BinaryExpression.ExpressionType.Add
     let subOperator = binaryOperator "-" BinaryExpression.ExpressionType.Subtract
     let operator = addOperator <|> subOperator
-    chainl1 mulExpression operator <?> "add expression"
+    chainl1 mulExpression operator <!> "add expression"
 
-let equalExpression =
-    let equalOperator = binaryOperator "><" BinaryExpression.ExpressionType.Equal
-    let notEqualOperaor = binaryOperator "<>" BinaryExpression.ExpressionType.NotEqual
+let equalExpression= parse{
+    let equalOperator = attempt (binaryOperator "=" BinaryExpression.ExpressionType.Equal)
+    let notEqualOperaor = attempt (binaryOperator "<>" BinaryExpression.ExpressionType.NotEqual)
     let operator = equalOperator <|> notEqualOperaor
-    chainl1 addExpression operator <?> "equal expression"
+    let! op = operator
+    let! rhs = addExpression
+    return fun lhs -> op lhs rhs
+}
 
-let relationalExpression = 
-    let greaterThan = attempt (binaryOperator ">" BinaryExpression.ExpressionType.GreaterThan .>> notFollowedByString "=")
+let relationalExpression = parse{
+    let greaterThan = binaryOperator ">" BinaryExpression.ExpressionType.GreaterThan .>>? notFollowedByString "="
     let greaterThanOrEq = binaryOperator ">=" BinaryExpression.ExpressionType.GreaterThanOrEqual
-    let lessThan = attempt (binaryOperator "<" BinaryExpression.ExpressionType.LessThan .>> notFollowedByString "=")
+    let lessThan = binaryOperator "<" BinaryExpression.ExpressionType.LessThan .>>? notFollowedByString "="
     let lessThanOrEq = binaryOperator "<=" BinaryExpression.ExpressionType.LessThanOrEqual
     let operator = 
         choice[
-            greaterThan
-            greaterThanOrEq
-            lessThan
-            lessThanOrEq
+            greaterThan <!> "gt expr"
+            greaterThanOrEq <!> "egt expr"
+            lessThan <!> "lt expr"
+            lessThanOrEq <!> "elt expr"
         ]
-    chainl1 addExpression operator <?> "relational expression"
-
-let compareExpression =
-    choice[
-        attempt relationalExpression
-        equalExpression
-    ]
+    let! op = operator
+    let! rhs = addExpression
+    return fun lhs -> op lhs rhs
+}
+let compareExpression = parse{
+    let! lhs = addExpression
+    let! op = choice[
+                equalExpression <!> "equal expr"
+                relationalExpression <!> "rel expr"
+              ] <!> "compare expression" 
+    return (op lhs)
+}
 let logicalAndExpression =
     let operator = binaryOperator "&&" BinaryExpression.ExpressionType.LogicalAnd
-    chainl1 compareExpression operator <?> "logical and expression"
+    chainl1 compareExpression operator <!> "logical and expression"
 
 let logicalOrExpression =
     let operator = binaryOperator "||" BinaryExpression.ExpressionType.LogicalOr
-    chainl1 logicalAndExpression operator <?> "logical or expression"
+    chainl1 logicalAndExpression operator <!> "logical or expression"
 
 let expressionList:Parser<_> = 
     let delimiter = skipChar ',' >>. spaces >>% (fun x xs -> List.concat [x;xs])
@@ -120,8 +150,9 @@ do expressionRef :=
     choice [
         attempt (callExpression |>> fun call -> call :> Expression)
         attempt (assignExpression |>> fun assign -> assign :> Expression)
-        logicalOrExpression
-    ] <?> "expression"
+        attempt logicalOrExpression
+        addExpression
+    ] <!> "expression"
 
 //Declaration
 //variableDeclarlationStatement = "let", identifier, ":", identifier, "=", initializer, ";"
@@ -251,17 +282,17 @@ let namespaceDeclaration = parse{
 
 let language = spaces >>. namespaceDeclaration
 
-let runAnyParser str parser =
-    match run parser str with
-    | Success(result,_,_) -> result
+let runAnyParser str parser verb =
+    match runParserOnString parser (nullContext verb) "" str with
+    | Success(result,state,_) -> (result,state.Messages |> List.toSeq)
     | Failure(_) as failure ->
         //let messages = ErrorMessageList.ToSortedArray(err.Messages)
         //raise (new CompileError(err.Position.Line,err.Position.Column,Array.map (fun x -> x.ToString()) messages))
         failwith (sprintf "%A" failure)
-let runCompareParser str =
-    runAnyParser str compareExpression
-let runParser str = 
-    runAnyParser str language
+let runCompareParser str verb =
+    runAnyParser str logicalOrExpression verb
+let runParser str verbose = 
+    runAnyParser str language verbose
 (*
 [<EntryPoint>]
 let main argv = 
