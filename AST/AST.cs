@@ -705,21 +705,47 @@ namespace AST
             visitor.Printer.Write("if(");
             condition.PrettyPrint(visitor);
             visitor.Printer.WriteLine(") then");
+            visitor.Printer.PushIndent();
             thenStatement.PrettyPrint(visitor);
+            visitor.Printer.PopIndent();
             foreach (var elif in elseIfList)
             {
                 visitor.Printer.Write("else if(");
                 elif.Item1.PrettyPrint(visitor);
                 visitor.Printer.WriteLine(") then");
+                visitor.Printer.PushIndent();
                 elif.Item2.PrettyPrint(visitor);
+                visitor.Printer.PopIndent();
             }
             visitor.Printer.WriteLine("else");
+            visitor.Printer.PushIndent();
             elseStatement.PrettyPrint(visitor);
+            visitor.Printer.PopIndent();
         }
 
         public void Generate(Visitor visitor)
         {
-            throw new NotImplementedException();
+            if (elseIfList.Any())
+            {
+                throw new NotImplementedException("elif not implemented");
+            }
+
+            var ilgen = visitor.Generator.CurrentMethod.GetILGenerator();
+
+            //var thenLabel = ilgen.DefineLabel();
+            var elseLabel = ilgen.DefineLabel();
+            var ifNext = ilgen.DefineLabel();
+
+            //optimizable when statements are empty
+            condition.Generate(visitor);
+            ilgen.Emit(OpCodes.Brfalse,elseLabel);
+            thenStatement.Generate(visitor);
+            ilgen.Emit(OpCodes.Br,ifNext);
+            ilgen.MarkLabel(elseLabel);
+            elseStatement.Generate(visitor);
+            //If there are no following statement, ifNext should not be generated.
+            //However, this program always generate ifNext for now.
+            ilgen.MarkLabel(ifNext);
         }
     }
 

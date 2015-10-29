@@ -16,16 +16,17 @@ namespace ASTAnalyser
             /*const string source = "4>3";
             var node = Parser.runCompareParser(source);
             var visitor = new Visitor("CPMAssembly");
-            node.PrettyPrint(visitor);*/
+            node.Item1.PrettyPrint(visitor);*/
             const string defaultSource =
 @"namespace TestProgram{
     class Klass{
-        static let namako:System.Int32 = 2;
-        static let hoge:System.Int32 = 6;
         static fn main():System.Int32 = {
-            namako <- 42;
-            hoge <- 52;
-            return (1 >< 1) || (2 - 2 < 0);
+            let val:System.Int32 = 56;
+            if(3 = 5){
+            }
+            else{
+            }
+            return val;
         }
     }
 }";
@@ -35,7 +36,14 @@ namespace ASTAnalyser
             {
                 Console.WriteLine("{0:00} {1}",line.number,line.str);
             }
-            var node = Parser.runParser(source) as Node;
+            var result = Parser.runParser(source,false);
+            var node = result.Item1;
+            var messages = result.Item2;
+            Console.WriteLine("messages:");
+            foreach (var message in messages.Reverse())
+            {
+                Console.WriteLine(message);
+            }
             var visitor = new Visitor("CPMAssembly");
             node.PrettyPrint(visitor);
             node.Generate(visitor);
