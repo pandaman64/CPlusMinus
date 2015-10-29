@@ -601,7 +601,14 @@ namespace AST
 
         public void Generate(Visitor visitor)
         {
-            visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Ldloc,variable.LocalIndex);
+            if (isLValue)
+            {
+                visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Stloc, variable.LocalIndex);
+            }
+            else
+            {
+                visitor.Generator.CurrentMethod.GetILGenerator().Emit(OpCodes.Ldloc, variable.LocalIndex);
+            }
         }
 
         public Type ResolveType()
